@@ -147,11 +147,11 @@ textarea.input {
     <div class="panel">
       <div class="title-row">
         <div>
-          <div class="logo">Local Certificate Generator (Persistent CA)</div>
-          <h1>Digital Certificate Generator</h1>
+          <div class="logo"></div>
+          <h1>Certrix 2.0 - Digital Certificate Generator</h1>
           <p class="lead">Create new certificates or renew existing ones from CSR, signed by the persisted CA.</p>
         </div>
-        <div style="color:var(--muted); font-size:12px">Certrix</div>
+        <div style="color:var(--muted); font-size:12px">Certrix 2.1.1</div>
       </div>
 
       <!-- MAIN GRID: New cert -->
@@ -513,30 +513,39 @@ def index():
 
 @app.route("/generate", methods=["POST"])
 def generate():
-    data = request.get_json() or {}
+    # Accept both JSON (fetch) and regular HTML form posts
+    data = request.get_json(silent=True)
+    if not data:
+        # Fallback to form fields (works for application/x-www-form-urlencoded or multipart/form-data)
+        data = request.form.to_dict(flat=True)
+
     cn = _sanitize_field(data.get("cn",""), 128)
     if not cn:
         return abort(400, "CN required")
-    country = _sanitize_field(data.get("country",""), 2)
-    state = _sanitize_field(data.get("state",""), 64)
+
+    country  = _sanitize_field(data.get("country",""), 2)
+    state    = _sanitize_field(data.get("state",""), 64)
     locality = _sanitize_field(data.get("locality",""), 64)
-    org = _sanitize_field(data.get("org",""), 128)
-    ou = _sanitize_field(data.get("ou",""), 128)
+    org      = _sanitize_field(data.get("org",""), 128)
+    ou       = _sanitize_field(data.get("ou",""), 128)
+
     try:
         years = int(data.get("years", "1"))
         years = max(1, min(years, 50))
     except Exception:
         years = 1
+
     try:
         key_size = int(data.get("key_size", "2048"))
         if key_size not in (2048, 3072, 4096):
             key_size = 2048
     except Exception:
         key_size = 2048
+
     key_pass = data.get("key_pass") or None
     pfx_pass = data.get("pfx_pass") or ""
 
-    # subject (for NEW cert)
+    # ----- subject (for NEW cert) -----
     subject_attrs = [x for x in [
         x509.NameAttribute(NameOID.COMMON_NAME, cn),
         x509.NameAttribute(NameOID.COUNTRY_NAME, country) if country else None,
@@ -549,26 +558,34 @@ def generate():
 
     ca_key, ca_cert = get_or_create_ca()
 
+    # ----- generate EE key + CSR -----
     ee_key = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
-    csr = x509.CertificateSigningRequestBuilder().subject_name(subject).sign(ee_key, hashes.SHA256())
+    csr = (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(subject)
+        .sign(ee_key, hashes.SHA256())
+    )
 
     now = datetime.datetime.utcnow()
     not_before = now - datetime.timedelta(minutes=1)
     not_after = add_years_exact(not_before, years)
+
     ski = x509.SubjectKeyIdentifier.from_public_key(ee_key.public_key())
     ca_ski = x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key())
     aki = x509.AuthorityKeyIdentifier(
         key_identifier=ca_ski.digest,
         authority_cert_issuer=None,
-        authority_cert_serial_number=None
+        authority_cert_serial_number=None,
     )
     key_usage = x509.KeyUsage(
         digital_signature=True, content_commitment=True,
         key_encipherment=True, data_encipherment=False,
         key_agreement=False, key_cert_sign=False, crl_sign=False,
-        encipher_only=False, decipher_only=False
+        encipher_only=False, decipher_only=False,
     )
-    eku = x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH, ExtendedKeyUsageOID.CLIENT_AUTH])
+    eku = x509.ExtendedKeyUsage(
+        [ExtendedKeyUsageOID.SERVER_AUTH, ExtendedKeyUsageOID.CLIENT_AUTH]
+    )
 
     ee_builder = (
         x509.CertificateBuilder()
@@ -585,10 +602,11 @@ def generate():
     )
     ee_cert = ee_builder.sign(private_key=ca_key, algorithm=hashes.SHA256())
 
+    # ----- temp files + PFX via OpenSSL -----
     tmpdir = Path(tempfile.mkdtemp(prefix="certrix-"))
     try:
-        ee_key_file = tmpdir / f"{cn}.key.pem"
-        ee_csr_file = tmpdir / f"{cn}.csr.pem"
+        ee_key_file  = tmpdir / f"{cn}.key.pem"
+        ee_csr_file  = tmpdir / f"{cn}.csr.pem"
         ee_cert_file = tmpdir / f"{cn}.cert.pem"
         ca_cert_file = tmpdir / "ca_cert.pem"
 
@@ -596,6 +614,7 @@ def generate():
             enc = serialization.BestAvailableEncryption(key_pass.encode("utf-8"))
         else:
             enc = serialization.NoEncryption()
+
         ee_key_file.write_bytes(
             ee_key.private_bytes(
                 encoding=serialization.Encoding.PEM,
@@ -614,13 +633,13 @@ def generate():
             openssl_bin, "pkcs12", "-export",
             "-out", str(pfx_path),
             "-inkey", str(ee_key_file),
-            "-in", str(ee_cert_file),      # EE cert
-            "-certfile", str(ca_cert_file),# CA cert
+            "-in",   str(ee_cert_file),
+            "-certfile", str(ca_cert_file),
             "-name", cn,
             "-certpbe", "PBE-SHA1-3DES",
-            "-keypbe", "PBE-SHA1-3DES",
-            "-macalg", "sha1",
-            "-passout", f"pass:{pfx_pass}"
+            "-keypbe",  "PBE-SHA1-3DES",
+            "-macalg",  "sha1",
+            "-passout", f"pass:{pfx_pass}",
         ]
         if key_pass:
             cmd += ["-passin", f"pass:{key_pass}"]
@@ -638,13 +657,18 @@ def generate():
             z.writestr(f"{cn}.pfx", pfx_path.read_bytes())
             z.writestr("ca_certificate.cer", ca_cert_file.read_bytes())
         mem.seek(0)
-        return send_file(mem, as_attachment=True, download_name=zip_filename, mimetype="application/zip")
+
+        return send_file(
+            mem,
+            as_attachment=True,
+            download_name=zip_filename,
+            mimetype="application/zip",
+        )
     finally:
         try:
             shutil.rmtree(tmpdir)
         except Exception:
             pass
-
 
 @app.route("/renew", methods=["POST"])
 def renew():
