@@ -364,14 +364,14 @@ input:-webkit-autofill:focus{
   <div class="panel">
     <div class="title-row">
       <div>
-        <div class="logo">Local Certificate Generator (Persistent ICICI CA)</div>
-        <h1>Digital Certificate Generator</h1>
+        <div class="logo"></div>
+        <h1>Certrix - Digital Certificate Generator</h1>
         <p class="lead">
           Create new certificates or renew existing ones from CSR, signed by the persisted CA.<br>
-          CA: <strong>ICICI Bank Certifying Authority for H2H</strong>
+          
         </p>
       </div>
-      <div style="color:var(--muted); font-size:12px">Certrix 2.2</div>
+      <div style="color:var(--muted); font-size:12px">Certrix 2.2.3</div>
     </div>
 
     <!-- New certificate -->
@@ -379,39 +379,39 @@ input:-webkit-autofill:focus{
       <form id="newForm" method="post" action="/generate" style="min-width:0">
         <div class="section">
           <label class="small">Common Name (CN)</label>
-          <input class="input" name="cn" required maxlength="128" placeholder="SHRI" />
+          <input class="input" name="cn" required maxlength="128" placeholder="Common Name " />
 
           <div class="row">
             <div>
               <label class="small">Country (2-letter)</label>
-              <input class="input" name="country" maxlength="2" placeholder="IN" />
+              <input class="input" name="country" maxlength="2" placeholder="Country Eg:IN" />
             </div>
             <div>
               <label class="small">State / Province</label>
-              <input class="input" name="state" placeholder="Maharashtra" />
+              <input class="input" name="state" placeholder="State" />
             </div>
           </div>
 
           <div class="single">
             <label class="small">Locality / City</label>
-            <input class="input" name="locality" placeholder="Mumbai" />
+            <input class="input" name="locality" placeholder="Locality" />
           </div>
 
           <div class="row">
             <div>
               <label class="small">Organization (O)</label>
-              <input class="input" name="org" placeholder="ICICI Bank H2H" />
+              <input class="input" name="org" placeholder="Organization" />
             </div>
             <div>
               <label class="small">Organizational Unit (OU)</label>
-              <input class="input" name="ou" placeholder="IT" />
+              <input class="input" name="ou" placeholder="Organizational Unit" />
             </div>
           </div>
 
           <div class="row">
             <div>
               <label class="small">Validity (years)</label>
-              <input class="input" name="years" type="number" value="1" min="1" max="50" />
+              <input class="input" name="years" type="number" value="5" min="5" max="50" />
             </div>
             <div>
               <label class="small">RSA key size (bits)</label>
@@ -451,16 +451,13 @@ input:-webkit-autofill:focus{
       <aside class="section output-box">
         <h3 style="margin:0 0 6px">Output (New certificate)</h3>
         <ul style="margin-left:18px; color:var(--muted); padding-left:0">
-          <li><strong>&lt;CN&gt;.prv</strong> — Private key (PEM)</li>
-          <li><strong>&lt;CN&gt;.csr</strong> — CSR (PEM)</li>
-          <li><strong>&lt;CN&gt;.cer</strong> — End-entity certificate (PEM)</li>
-          <li><strong>&lt;CN&gt;.pfx</strong> — PKCS#12 / PFX (legacy 3DES+SHA1, chain included)</li>
+          <li><strong>certificate.prv</strong> — Private key (PEM)</li>
+          <li><strong>certificate.csr</strong> — CSR (PEM)</li>
+          <li><strong>certificate.cer</strong> — End-entity certificate (PEM)</li>
+          <li><strong>certificate.pfx</strong> — PKCS#12 / PFX (legacy 3DES+SHA1, chain included)</li>
         </ul>
         <hr style="border:none; height:1px; background:rgba(255,255,255,0.03); margin:10px 0">
-        <p class="muted">
-          CA key is persisted at <code>{{ ca_path }}</code>.<br>
-          Protect that file (chmod 600) and limit access in production.
-        </p>
+      
       </aside>
     </div>
 
@@ -485,7 +482,7 @@ input:-webkit-autofill:focus{
 
         <div class="single">
           <label class="small">Validity (years)</label>
-          <input class="input" name="years" type="number" value="1" min="1" max="50" />
+          <input class="input" name="years" type="number" value="5" min="5" max="50" />
         </div>
 
         <div class="footer-row">
@@ -518,7 +515,7 @@ input:-webkit-autofill:focus{
           </div>
           <div>
             <label class="small">Validity (years)</label>
-            <input class="input" name="years" type="number" value="1" min="1" max="50" />
+            <input class="input" name="years" type="number" value="5" min="5" max="50" />
           </div>
         </div>
         <div class="footer-row">
@@ -532,7 +529,7 @@ input:-webkit-autofill:focus{
     </div>
 
     <footer class="site">
-      Certrix • Persistent CA, New Cert, CSR Preview &amp; Bulk Renewal
+       Certrix
     </footer>
   </div>
 </div>
@@ -1231,14 +1228,16 @@ def renew():
     mem.seek(0)
 
     response = send_file(
-        mem,
-        as_attachment=True,
-        download_name=f"{file_cn}.cer",
-        mimetype="application/x-pem-file",
-    )
-    response.headers["X-Suggested-Filename"] = f"{file_cn}.cer"
-    return response
+    mem,
+    as_attachment=True,
+    download_name=f"{file_cn}.cer",
+    mimetype="application/x-pem-file",
+  )
 
+# Force correct filename format recognized by browsers
+    response.headers["Content-Disposition"] = f'attachment; filename="{file_cn}.cer"'
+
+    return response
 
 @app.route("/csr_preview", methods=["POST"])
 def csr_preview():
