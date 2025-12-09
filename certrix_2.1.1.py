@@ -302,15 +302,48 @@ textarea.input {
         const t = await resp.text().catch(()=>resp.statusText);
         showMsg('Error: '+t,'err'); return;
       }
-      const blob = await resp.blob();
-      const cd = resp.headers.get('Content-Disposition') || '';
-      const filename = (cd.match(/filename="(.+)"/)||[])[1] || 'certs.zip';
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = filename;
-      document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
-      showMsg('Download started: '+filename,'ok');
+const blob = await resp.blob();
+
+// Try to get filename from Content-Disposition
+const cd = resp.headers.get('Content-Disposition') || '';
+const match = cd.match(/filename="([^"]+)"/);
+let filename = match ? match[1] : null;
+
+// Fallback: custom header from Flask
+if (!filename) {
+  filename = resp.headers.get('X-Suggested-Filename');
+}
+
+if (!filename) {
+  showRenewMsg('Error: Server did not provide a filename','err');
+  return;
+}
+
+const url = URL.createObjectURL(blob);
+const a = document.createElement('a');
+a.href = url;
+a.download = filename;
+document.body.appendChild(a);
+a.click();
+a.remove();
+URL.revokeObjectURL(url);
+
+showRenewMsg('Renewed certificate download started: ' + filename, 'ok');
+
+if (!filename) {
+  showRenewMsg('Error: Server did not provide a filename','err');
+  return;
+    }
+
+     const url = URL.createObjectURL(blob);
+     const a = document.createElement('a');
+     a.href = url;
+     a.download = filename;
+     document.body.appendChild(a);
+     a.click();
+     a.remove();
+     URL.revokeObjectURL(url);
+     showRenewMsg('Renewed certificate download started: ' + filename, 'ok');
     }catch(err){
       showMsg('Server or network error','err');
     }finally{
@@ -740,12 +773,17 @@ def renew():
     mem = io.BytesIO(pem_bytes)
     mem.seek(0)
 
-    return send_file(
+    # send_file will set Content-Disposition; we also add a custom header
+    response = send_file(
         mem,
         as_attachment=True,
         download_name=f"{file_cn}.cer",
         mimetype="application/x-pem-file",
     )
+    # extra safety: JS can read this if CD header is missing/rewritten
+    response.headers["X-Suggested-Filename"] = f"{file_cn}.cer"
+    return response
+    
 
 # ---- run ----
 if __name__ == "__main__":
