@@ -500,10 +500,15 @@ def load_csr_auto(data: bytes) -> x509.CertificateSigningRequest:
     if b"-----BEGIN CERTIFICATE REQUEST-----" in data or b"-----BEGIN NEW CERTIFICATE REQUEST-----" in data:
         return x509.load_pem_x509_csr(data)
     # otherwise try PEM then DER
+    data = data.replace(b"\r\n", b"\n")  # normalize for Windows users
+
     try:
         return x509.load_pem_x509_csr(data)
     except Exception:
-        return x509.load_der_x509_csr(data)
+        try:
+            return x509.load_der_x509_csr(data)
+        except Exception as e:
+            raise ValueError(f"CSR is neither valid PEM nor DER: {e}")
     
 def csr_subject_dict(csr: x509.CertificateSigningRequest):
     """
@@ -912,61 +917,78 @@ def csr_preview():
       - csr_text (pasted PEM)
     Returns JSON for easy UI rendering.
     """
-    csr_file = request.files.get("csr_file")
+    # ---- 1) Try to read uploaded file first ----
+    if "csr_file" in request.files:
+        f = request.files["csr_file"]
+        if f.filename:
+            try:
+                csr_bytes = f.read()
+                csr = load_csr_auto(csr_bytes)
+                source = f.filename
+                return jsonify({
+                    "source": source,
+                    "subject": csr_subject_dict(csr),
+                })
+            except Exception as e:
+                return jsonify({"error": "Invalid CSR File", "detail": str(e)}), 400
+
+    # ---- 2) Try text input / pasted CSR ----
     csr_text = (request.form.get("csr_text") or "").strip()
+    if csr_text:
+        try:
+            # Accept missing newline endings
+            if not csr_text.endswith("\n"):
+                csr_text += "\n"
+            csr = load_csr_auto(csr_text.encode("utf-8"))
+            return jsonify({
+                "source": "pasted",
+                "subject": csr_subject_dict(csr),
+            })
+        except Exception as e:
+            return jsonify({"error": "Invalid CSR Text", "detail": str(e)}), 400
 
-    if csr_file and csr_file.filename:
-        csr_bytes = csr_file.read()
-        source = csr_file.filename
-    elif csr_text:
-        csr_bytes = csr_text.encode("utf-8")
-        source = "pasted"
-    else:
-        return jsonify({"error": "CSR file or CSR text is required"}), 400
+    # ---- 3) If nothing is provided ----
+    return jsonify({"error": "CSR file or CSR text is required"}), 400
 
-    try:
-        csr = load_csr_auto(csr_bytes)
-    except Exception as e:
-        return jsonify({"error": "Could not parse CSR (PEM or DER).", "detail": str(e)}), 400
 
-    subj = csr_subject_dict(csr)
+    # subj = csr_subject_dict(csr)
 
-    # basic key info
-    key = csr.public_key()
-    key_info = {}
-    try:
-        from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
-        if isinstance(key, _rsa.RSAPublicKey):
-            key_info = {"type": "RSA", "size": key.key_size}
-        else:
-            key_info = {"type": key.__class__.__name__}
-    except Exception:
-        key_info = {"type": "unknown"}
+    # # basic key info
+    # key = csr.public_key()
+    # key_info = {}
+    # try:
+    #     from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
+    #     if isinstance(key, _rsa.RSAPublicKey):
+    #         key_info = {"type": "RSA", "size": key.key_size}
+    #     else:
+    #         key_info = {"type": key.__class__.__name__}
+    # except Exception:
+    #     key_info = {"type": "unknown"}
 
-    # simple EKU + KeyUsage summary if present
-    eku_oids = []
-    ku_flags = None
-    try:
-        for ext in csr.extensions:
-            if isinstance(ext.value, x509.ExtendedKeyUsage):
-                eku_oids = [oid.dotted_string for oid in ext.value]
-            if isinstance(ext.value, x509.KeyUsage):
-                ku = ext.value
-                ku_flags = {
-                    "digital_signature": ku.digital_signature,
-                    "non_repudiation": ku.content_commitment,
-                    "key_encipherment": ku.key_encipherment,
-                }
-    except Exception:
-        pass
+    # # simple EKU + KeyUsage summary if present
+    # eku_oids = []
+    # ku_flags = None
+    # try:
+    #     for ext in csr.extensions:
+    #         if isinstance(ext.value, x509.ExtendedKeyUsage):
+    #             eku_oids = [oid.dotted_string for oid in ext.value]
+    #         if isinstance(ext.value, x509.KeyUsage):
+    #             ku = ext.value
+    #             ku_flags = {
+    #                 "digital_signature": ku.digital_signature,
+    #                 "non_repudiation": ku.content_commitment,
+    #                 "key_encipherment": ku.key_encipherment,
+    #             }
+    # except Exception:
+    #     pass
 
-    return jsonify({
-        "source": source,
-        "subject": subj,
-        "key": key_info,
-        "eku": eku_oids,
-        "key_usage": ku_flags,
-    })
+    # return jsonify({
+    #     "source": source,
+    #     "subject": subj,
+    #     "key": key_info,
+    #     "eku": eku_oids,
+    #     "key_usage": ku_flags,
+    # })
 
 @app.route("/renew_bulk", methods=["POST"])
 def renew_bulk():
